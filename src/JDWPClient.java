@@ -12,9 +12,18 @@ import java.io.PrintWriter;
 import java.util.*;
 import java.util.stream.Collectors;
 
+/*
+TODO
+Local VPT (with the name as it appears in the Var relations)
+Parameter VPT
+this VPT
+context
+*/
+
 public class JDWPClient {
     public static final String immutable = "<Immutable dctx>";
     public static PrintWriter cge;
+    public static PrintWriter reach;
     public static PrintWriter vpt;
     public static PrintWriter ctx;
 
@@ -29,19 +38,34 @@ public class JDWPClient {
         args.get("hostname").setValue(host);
         args.get("port").setValue(Integer.toString(port));
         try {
-            cge = new PrintWriter(new BufferedWriter(new FileWriter("DynamicCallGraphEdge.csv", append)));
-            vpt = new PrintWriter(new BufferedWriter(new FileWriter("DynamicVarPointsTo.csv", append)));
-            ctx = new PrintWriter(new BufferedWriter(new FileWriter("DynamicContext.csv", append)));
+            cge = new PrintWriter(new BufferedWriter(new FileWriter("DynamicCallGraphEdge.facts", append)));
+            reach = new PrintWriter(new BufferedWriter(new FileWriter("DynamicReachable.facts", append)));
+            vpt = new PrintWriter(new BufferedWriter(new FileWriter("DynamicVarPointsTo.facts", append)));
+            ctx = new PrintWriter(new BufferedWriter(new FileWriter("DynamicContext.facts", append)));
+
             vm = connector.attach(args);
         } catch (Exception e) {
-            throw new IllegalStateException(e);
+            e.printStackTrace();
         }
         appendToFile(ctx, immutable, 0, 0);
+    }
+
+    public void breakOnMethod(String className, String methodName) {
+        for (ReferenceType c : vm.allClasses()) {
+            if (c.name().equals(className)) {
+                for (Method m : c.allMethods()) {
+                    if (m.name().equals(methodName)) {
+                        vm.eventRequestManager().createBreakpointRequest(m.location()).setEnabled(true);
+                    }
+                }
+            }
+        }
     }
 
     public void close() {
         System.out.println("Shutting down...");
         cge.close();
+        reach.close();
         vpt.close();
         ctx.close();
     }
@@ -54,9 +78,12 @@ public class JDWPClient {
         }
     }
 
+    public static Optional<String> getVarName(StackFrame frame, LocalVariable var) {
+        return getMethodName(frame.location().method()).map(s -> s + "/" + var.name());
+    }
+
     public static void dumpThread(ThreadReference thread) {
         thread.suspend();
-        System.out.println(thread.toString());
         try {
             List<StackFrame> frames = thread.frames();
 
@@ -68,17 +95,27 @@ public class JDWPClient {
                 Location to = iter1.next().location();
                 appendToFile(cge, getMethodName(from.method()).get(), from.lineNumber(), getMethodName(to.method()).get(), immutable, immutable);
             }
-            frames.forEach(stackFrame -> {
-                System.out.println(" - " + JDWPClient.getMethodName(stackFrame.location().method()).get());
-            });
+
+            frames.forEach(frame -> appendToFile(reach, getMethodName(frame.location().method()).get()));
+            frames.forEach(JDWPClient::dumpLocals);
         } catch (IncompatibleThreadStateException e) {
             e.printStackTrace();
         }
         thread.resume();
     }
 
+    public static void dumpLocals(StackFrame frame) {
+        try {
+            Map<LocalVariable, Value> varMap = frame.getValues(frame.visibleVariables());
+            varMap.forEach((var, val) -> {
+                String varn = getVarName(frame, var).get();
+                System.out.println(varn + " -> " + val.toString());
+            });
+        } catch (AbsentInformationException e) {}
+    }
+
     public static void appendToFile(PrintWriter p, Object... fields) {
-        p.println(Arrays.stream(fields).map(Object::toString).collect(Collectors.joining("\t")));
+        p.println(Arrays.stream(fields).map(o -> o.toString().replace('\t', ' ')).collect(Collectors.joining("\t")));
     }
 
     public void handleEvents() {
@@ -88,7 +125,9 @@ public class JDWPClient {
                 EventSet eventSet = eventQueue.remove();
                 for (Event e : eventSet) {
                     if (e instanceof BreakpointEvent) {
-                        dumpThread(((BreakpointEvent) e).thread());
+                        ThreadReference thread = ((BreakpointEvent) e).thread();
+                        System.out.println("Break on: " + thread.frame(0).location().method());
+                        dumpThread(thread);
                     }
                 }
                 eventSet.resume();

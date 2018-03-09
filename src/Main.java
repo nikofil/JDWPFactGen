@@ -5,6 +5,7 @@ public class Main {
         client.vm.allThreads().stream()
                 .filter(thread -> thread.name().contains("alfresco"))
                 .forEach(JDWPClient::dumpThread);
+        System.out.println("Thread dump complete, listening for events");
         client.handleEvents();
     }
 }
