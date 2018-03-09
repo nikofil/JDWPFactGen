@@ -9,7 +9,7 @@ public class Main {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> client.close()));
             client.vm.allThreads().stream()
                     .filter(thread -> thread.name().contains("alfresco"))
-                    .forEach(JDWPClient::dumpThread);
+                    .forEach(client::dumpThread);
             System.out.println("Thread dump complete, listening for events");
             // client.handleEvents();
         } catch (IOException e) {

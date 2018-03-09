@@ -18,6 +18,8 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 public class JDWPClient {
+    private static final int depthLim = 20; // depth limit for visiting object fields
+
     private static final String immutable = "<Immutable dctx>";
     private static PrintWriter cge;
     private static PrintWriter reach;
@@ -30,6 +32,7 @@ public class JDWPClient {
     private static PrintWriter methinvo; // todo
     private static PrintWriter staticpt; // todo
     private static PrintWriter strheap; // todo
+    private Set<Long> refSet;
 
     public VirtualMachine vm;
 
@@ -41,6 +44,8 @@ public class JDWPClient {
         Map<String, Connector.Argument> args = connector.defaultArguments();
         args.get("hostname").setValue(host);
         args.get("port").setValue(Integer.toString(port));
+
+        resetRefs();
 
         cge = new PrintWriter(new BufferedWriter(new FileWriter("DynamicCallGraphEdge.facts", append)));
         reach = new PrintWriter(new BufferedWriter(new FileWriter("DynamicReachableMethod.facts", append)));
@@ -57,6 +62,10 @@ public class JDWPClient {
         vm = connector.attach(args);
         // todo figure this out
         appendToFile(ctx, immutable, "<>", "<>", "<>", 0, "<>", 0);
+    }
+
+    public void resetRefs() {
+        refSet = new HashSet<>();
     }
 
     public void breakOnMethod(String className, String methodName) {
@@ -94,11 +103,11 @@ public class JDWPClient {
         }
     }
 
-    public static Optional<String> getVarName(StackFrame frame, LocalVariable var) {
-        return getMethodName(frame.location().method()).map(s -> s + "/" + var.name());
+    public static Optional<String> getVarName(StackFrame frame, String var) {
+        return getMethodName(frame.location().method()).map(s -> s + "/" + var);
     }
 
-    public static void dumpThread(ThreadReference thread) {
+    public void dumpThread(ThreadReference thread) {
         thread.suspend();
         try {
             List<StackFrame> frames = thread.frames();
@@ -113,53 +122,70 @@ public class JDWPClient {
             }
 
             frames.forEach(frame -> appendToFile(reach, getMethodName(frame.location().method()).get()));
-            frames.forEach(JDWPClient::dumpLocals);
+            frames.forEach(this::dumpLocals);
         } catch (IncompatibleThreadStateException e) {
             e.printStackTrace();
         }
         thread.resume();
     }
 
-    public static void dumpLocals(StackFrame frame) {
+    public void dumpLocals(StackFrame frame) {
         try {
             Map<LocalVariable, Value> varMap = frame.getValues(frame.visibleVariables());
+            String thisRep = dumpValue(frame.thisObject(), refSet, depthLim);
+            String thisVarName = getVarName(frame, "@this").get();
+            appendToFile(vpt, immutable, thisRep, immutable, thisVarName);
+            ListIterator<Value> argIter = frame.getArgumentValues().listIterator();
+            // todo test params
+            while (argIter.hasNext()) {
+                int parIdx = argIter.nextIndex();
+                String paramRep = dumpValue(argIter.next(), refSet, depthLim);
+                String paramName = getVarName(frame, "@parameter" + parIdx).get();
+                appendToFile(vpt, immutable, paramRep, immutable, paramName);
+            }
             varMap.forEach((var, val) -> {
-                String varn = getVarName(frame, var).get();
-                // System.out.println(varn + " -> " + val.toString());
+                String varName = getVarName(frame, var.name()).get();
+                // System.out.println(varName + " -> " + val.toString());
                 // todo do smth with contexts?
-                String valRep = dumpValue(val, new HashSet<>());
-                appendToFile(vpt, immutable, valRep, immutable, varn);
+                String valRep = dumpValue(val, refSet, depthLim);
+                appendToFile(vpt, immutable, valRep, immutable, varName);
             });
         } catch (AbsentInformationException e) {}
     }
 
-    public static String dumpValue(Value val, Set<Long> visited) {
+    public String dumpValue(Value val, Set<Long> visited, long depthLim) {
         String rv;
-        if (val instanceof ObjectReferenceImpl) {
-            if (val instanceof ArrayReferenceImpl) {
-                // todo
-                rv = "array!";
-            } else {
-                ObjectReferenceImpl obj = (ObjectReferenceImpl) val;
-                String curVal = obj.type().signature() + obj.type().name() + "@" + obj.uniqueID();
-                if (visited.add(obj.uniqueID())) {
-                    for (Map.Entry<Field, Value> f : obj.getValues(((ClassTypeImpl) (obj.type())).fields()).entrySet()) {
-                        String value = dumpValue(f.getValue(), visited);
-                        // System.out.println("field " + f.getKey().name() + " -> " + value);
-                        appendToFile(fldpt, curVal, f.getKey().name(), f.getKey().declaringType().name(), value);
+        try {
+            if (val instanceof ObjectReferenceImpl) {
+                if (val instanceof ArrayReferenceImpl) {
+                    // todo
+                    rv = "array!";
+                } else {
+                    ObjectReferenceImpl obj = (ObjectReferenceImpl) val;
+                    String curVal = obj.type().name() + "@" + obj.uniqueID();
+                    if (visited.add(obj.uniqueID())) {
+                        if (depthLim > 0) {
+                            for (Map.Entry<Field, Value> f : obj.getValues(((ClassTypeImpl) (obj.type())).fields()).entrySet()) {
+                                String value = dumpValue(f.getValue(), visited, depthLim - 1);
+                                // System.out.println("field " + f.getKey().name() + " -> " + value);
+                                appendToFile(fldpt, curVal, f.getKey().name(), f.getKey().declaringType().name(), value);
+                            }
+                        }
+                        // todo can improve this? (alloc line and method)
+                        appendToFile(halloc, 0, "?", obj.type().name(), curVal);
                     }
-                    // todo can improve this? (alloc line and method)
-                    appendToFile(halloc, 0, "?", obj.type().name(), curVal);
+                    // System.out.println("val: " + curVal);
+                    rv = curVal;
                 }
-                // System.out.println("val: " + curVal);
-                rv = curVal;
+            } else if (val != null) {
+                rv = val.toString();
+            } else {
+                rv = "null";
             }
-        } else if (val != null) {
-            rv = val.toString();
-        } else {
+            appendToFile(hobj, rv, immutable, rv);
+        } catch (Exception e) {
             rv = "null";
         }
-        appendToFile(hobj, rv, immutable, rv);
         return rv;
     }
 
