@@ -15,10 +15,10 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.*;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 public class JDWPClient {
-    private static final int depthLim = 20; // depth limit for visiting object fields
 
     private static final String immutable = "<Immutable dctx>";
     private static PrintWriter cge;
@@ -36,6 +36,10 @@ public class JDWPClient {
 
     public VirtualMachine vm;
 
+    public int depthLim; // depth limit for visiting object fields
+    public Predicate<Field> fldFilter; // filter for dumping fields
+    public Predicate<StackFrame> stackFrameFilter; // filter for dumping stack frames
+
     public JDWPClient(String host, int port, boolean append) throws IOException, IllegalConnectorArgumentsException {
         AttachingConnector connector = Bootstrap.virtualMachineManager().
                 attachingConnectors().stream().filter(
@@ -46,6 +50,9 @@ public class JDWPClient {
         args.get("port").setValue(Integer.toString(port));
 
         resetRefs();
+        fldFilter = x -> true;
+        stackFrameFilter = x -> true;
+        depthLim = 1000;
 
         cge = new PrintWriter(new BufferedWriter(new FileWriter("DynamicCallGraphEdge.facts", append)));
         reach = new PrintWriter(new BufferedWriter(new FileWriter("DynamicReachableMethod.facts", append)));
@@ -122,7 +129,7 @@ public class JDWPClient {
             }
 
             frames.forEach(frame -> appendToFile(reach, getMethodName(frame.location().method()).get()));
-            frames.forEach(this::dumpLocals);
+            frames.stream().filter(stackFrameFilter).forEach(this::dumpLocals);
         } catch (IncompatibleThreadStateException e) {
             e.printStackTrace();
         }
@@ -166,9 +173,11 @@ public class JDWPClient {
                     if (visited.add(obj.uniqueID())) {
                         if (depthLim > 0) {
                             for (Map.Entry<Field, Value> f : obj.getValues(((ClassTypeImpl) (obj.type())).fields()).entrySet()) {
-                                String value = dumpValue(f.getValue(), visited, depthLim - 1);
-                                // System.out.println("field " + f.getKey().name() + " -> " + value);
-                                appendToFile(fldpt, curVal, f.getKey().name(), f.getKey().declaringType().name(), value);
+                                if (fldFilter.test(f.getKey())) {
+                                    String value = dumpValue(f.getValue(), visited, depthLim - 1);
+                                    // System.out.println("field " + f.getKey().name() + " -> " + value);
+                                    appendToFile(fldpt, curVal, f.getKey().name(), f.getKey().declaringType().name(), value);
+                                }
                             }
                         }
                         // todo can improve this? (alloc line and method)
@@ -199,7 +208,7 @@ public class JDWPClient {
             try {
                 EventSet eventSet = eventQueue.remove();
                 for (Event e : eventSet) {
-                    if (e instanceof BreakpointEvent) {
+                    if (e instanceof BreakpointEvent) { // todo test
                         ThreadReference thread = ((BreakpointEvent) e).thread();
                         System.out.println("Break on: " + thread.frame(0).location().method());
                         dumpThread(thread);

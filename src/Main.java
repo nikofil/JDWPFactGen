@@ -6,6 +6,7 @@ public class Main {
     public static void main(String[] args) {
         try {
             JDWPClient client = new JDWPClient("localhost", 5005, false);
+            client.depthLim = 20;
             Runtime.getRuntime().addShutdownHook(new Thread(() -> client.close()));
             client.vm.allThreads().stream()
                     .filter(thread -> thread.name().contains("alfresco"))
