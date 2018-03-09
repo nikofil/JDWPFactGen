@@ -18,14 +18,18 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 public class JDWPClient {
-    public static final String immutable = "<Immutable dctx>";
-    public static PrintWriter cge;
-    public static PrintWriter reach;
-    public static PrintWriter vpt;
-    public static PrintWriter ctx;
-    public static PrintWriter fld;
-    public static PrintWriter hobj;
-    public static PrintWriter halloc;
+    private static final String immutable = "<Immutable dctx>";
+    private static PrintWriter cge;
+    private static PrintWriter reach;
+    private static PrintWriter vpt;
+    private static PrintWriter ctx;
+    private static PrintWriter fldpt;
+    private static PrintWriter hobj;
+    private static PrintWriter halloc;
+    private static PrintWriter arrpt; // todo
+    private static PrintWriter methinvo; // todo
+    private static PrintWriter staticpt; // todo
+    private static PrintWriter strheap; // todo
 
     public VirtualMachine vm;
 
@@ -39,15 +43,20 @@ public class JDWPClient {
         args.get("port").setValue(Integer.toString(port));
 
         cge = new PrintWriter(new BufferedWriter(new FileWriter("DynamicCallGraphEdge.facts", append)));
-        reach = new PrintWriter(new BufferedWriter(new FileWriter("DynamicReachable.facts", append)));
+        reach = new PrintWriter(new BufferedWriter(new FileWriter("DynamicReachableMethod.facts", append)));
         vpt = new PrintWriter(new BufferedWriter(new FileWriter("DynamicVarPointsTo.facts", append)));
         ctx = new PrintWriter(new BufferedWriter(new FileWriter("DynamicContext.facts", append)));
-        fld = new PrintWriter(new BufferedWriter(new FileWriter("DynamicInstanceFieldPointsTo.facts", append)));
+        fldpt = new PrintWriter(new BufferedWriter(new FileWriter("DynamicInstanceFieldPointsTo.facts", append)));
         hobj = new PrintWriter(new BufferedWriter(new FileWriter("DynamicNormalHeapObject.facts", append)));
         halloc = new PrintWriter(new BufferedWriter(new FileWriter("DynamicNormalHeapAllocation.facts", append)));
+        arrpt = new PrintWriter(new BufferedWriter(new FileWriter("DynamicArrayIndexPointsTo.facts", append)));
+        methinvo = new PrintWriter(new BufferedWriter(new FileWriter("DynamicMethodInvocation.facts", append)));
+        staticpt = new PrintWriter(new BufferedWriter(new FileWriter("DynamicStaticFieldPointsTo.facts", append)));
+        strheap = new PrintWriter(new BufferedWriter(new FileWriter("DynamicStringHeapObject.facts", append)));
 
         vm = connector.attach(args);
-        appendToFile(ctx, immutable, 0, 0);
+        // todo figure this out
+        appendToFile(ctx, immutable, "<>", "<>", "<>", 0, "<>", 0);
     }
 
     public void breakOnMethod(String className, String methodName) {
@@ -67,9 +76,13 @@ public class JDWPClient {
         reach.close();
         vpt.close();
         ctx.close();
-        fld.close();
+        fldpt.close();
         hobj.close();
         halloc.close();
+        arrpt.close();
+        methinvo.close();
+        staticpt.close();
+        strheap.close();
         System.out.println("Shutting down...");
     }
 
@@ -112,7 +125,7 @@ public class JDWPClient {
             Map<LocalVariable, Value> varMap = frame.getValues(frame.visibleVariables());
             varMap.forEach((var, val) -> {
                 String varn = getVarName(frame, var).get();
-                System.out.println(varn + " -> " + val.toString());
+                // System.out.println(varn + " -> " + val.toString());
                 // todo do smth with contexts?
                 String valRep = dumpValue(val, new HashSet<>());
                 appendToFile(vpt, immutable, valRep, immutable, varn);
@@ -132,13 +145,13 @@ public class JDWPClient {
                 if (visited.add(obj.uniqueID())) {
                     for (Map.Entry<Field, Value> f : obj.getValues(((ClassTypeImpl) (obj.type())).fields()).entrySet()) {
                         String value = dumpValue(f.getValue(), visited);
-                        System.out.println("field " + f.getKey().name() + " -> " + value);
-                        appendToFile(fld, curVal, f.getKey().name(), f.getKey().declaringType().name(), value);
+                        // System.out.println("field " + f.getKey().name() + " -> " + value);
+                        appendToFile(fldpt, curVal, f.getKey().name(), f.getKey().declaringType().name(), value);
                     }
                     // todo can improve this? (alloc line and method)
                     appendToFile(halloc, 0, "?", obj.type().name(), curVal);
                 }
-                System.out.println("val: " + curVal);
+                // System.out.println("val: " + curVal);
                 rv = curVal;
             }
         } else if (val != null) {
