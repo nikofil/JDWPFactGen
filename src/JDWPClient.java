@@ -8,9 +8,6 @@ import com.sun.jdi.event.EventQueue;
 import com.sun.jdi.event.EventSet;
 import com.sun.jdi.request.BreakpointRequest;
 import com.sun.jdi.request.EventRequest;
-import com.sun.tools.jdi.ArrayReferenceImpl;
-import com.sun.tools.jdi.ClassTypeImpl;
-import com.sun.tools.jdi.ObjectReferenceImpl;
 
 import java.io.BufferedWriter;
 import java.io.FileWriter;
@@ -23,6 +20,7 @@ import java.util.stream.Collectors;
 public class JDWPClient {
 
     private static final String immutable = "<Immutable dctx>";
+
     private static PrintWriter cge;
     private static PrintWriter reach;
     private static PrintWriter vpt;
@@ -31,7 +29,6 @@ public class JDWPClient {
     private static PrintWriter hobj;
     private static PrintWriter halloc;
     private static PrintWriter arrpt; // todo
-    private static PrintWriter methinvo; // todo
     private static PrintWriter staticpt; // todo
     private static PrintWriter strheap; // todo
     private Set<Long> refSet;
@@ -64,7 +61,6 @@ public class JDWPClient {
         hobj = new PrintWriter(new BufferedWriter(new FileWriter("DynamicNormalHeapObject.facts", append)));
         halloc = new PrintWriter(new BufferedWriter(new FileWriter("DynamicNormalHeapAllocation.facts", append)));
         arrpt = new PrintWriter(new BufferedWriter(new FileWriter("DynamicArrayIndexPointsTo.facts", append)));
-        methinvo = new PrintWriter(new BufferedWriter(new FileWriter("DynamicMethodInvocation.facts", append)));
         staticpt = new PrintWriter(new BufferedWriter(new FileWriter("DynamicStaticFieldPointsTo.facts", append)));
         strheap = new PrintWriter(new BufferedWriter(new FileWriter("DynamicStringHeapObject.facts", append)));
 
@@ -105,7 +101,6 @@ public class JDWPClient {
         hobj.flush();
         halloc.flush();
         arrpt.flush();
-        methinvo.flush();
         staticpt.flush();
         strheap.flush();
     }
@@ -119,7 +114,6 @@ public class JDWPClient {
         hobj.close();
         halloc.close();
         arrpt.close();
-        methinvo.close();
         staticpt.close();
         strheap.close();
         System.out.println("Cleanup finished!");
@@ -163,43 +157,74 @@ public class JDWPClient {
         try {
             Map<LocalVariable, Value> varMap = frame.getValues(frame.visibleVariables());
             String thisRep = dumpValue(frame.thisObject(), refSet, depthLim);
-            String thisVarName = getVarName(frame, "@this").get();
-            appendToFile(vpt, immutable, thisRep, immutable, thisVarName);
+            if (thisRep != null) {
+                String thisVarName = getVarName(frame, "@this").get();
+                appendToFile(vpt, immutable, thisRep, immutable, thisVarName);
+            }
             ListIterator<Value> argIter = frame.getArgumentValues().listIterator();
             // todo test params
             while (argIter.hasNext()) {
                 int parIdx = argIter.nextIndex();
                 String paramRep = dumpValue(argIter.next(), refSet, depthLim);
-                String paramName = getVarName(frame, "@parameter" + parIdx).get();
-                appendToFile(vpt, immutable, paramRep, immutable, paramName);
+                if (paramRep != null) {
+                    String paramName = getVarName(frame, "@parameter" + parIdx).get();
+                    appendToFile(vpt, immutable, paramRep, immutable, paramName);
+                }
             }
             varMap.forEach((var, val) -> {
-                String varName = getVarName(frame, var.name()).get();
                 // System.out.println(varName + " -> " + val.toString());
                 // todo do smth with contexts?
                 String valRep = dumpValue(val, refSet, depthLim);
-                appendToFile(vpt, immutable, valRep, immutable, varName);
+                String varName = getVarName(frame, var.name()).get();
+                if (valRep != null) {
+                    appendToFile(vpt, immutable, valRep, immutable, varName);
+                }
             });
         } catch (AbsentInformationException e) {}
+    }
+
+    private long hashObj(ObjectReference ref) {
+        return ref.type().signature().hashCode()*100000 + ref.uniqueID();
     }
 
     public String dumpValue(Value val, Set<Long> visited, long depthLim) {
         String rv;
         try {
-            if (val instanceof ObjectReferenceImpl) {
-                if (val instanceof ArrayReferenceImpl) {
-                    // todo
-                    rv = "array!";
+            if (val instanceof ObjectReference) {
+                if (val instanceof ArrayReference) {
+                    ArrayReference arr = (ArrayReference) val;
+                    String curVal = arr.type().name() + "@" + arr.uniqueID();
+                    if (visited.add(hashObj(arr)) && !(((ArrayType)arr.type()).componentType() instanceof PrimitiveType)) {
+                        for (Value av : arr.getValues()) {
+                            String avRef = dumpValue(av, visited, depthLim - 1);
+                            if (avRef != null) {
+                                appendToFile(arrpt, curVal, avRef);
+                            }
+                        }
+                    }
+                    rv = curVal;
                 } else {
-                    ObjectReferenceImpl obj = (ObjectReferenceImpl) val;
+                    ObjectReference obj = (ObjectReference) val;
                     String curVal = obj.type().name() + "@" + obj.uniqueID();
-                    if (visited.add(obj.uniqueID())) {
+                    if (visited.add(hashObj(obj))) {
                         if (depthLim > 0) {
-                            for (Map.Entry<Field, Value> f : obj.getValues(((ClassTypeImpl) (obj.type())).fields()).entrySet()) {
+                            for (Map.Entry<Field, Value> f : obj.getValues(((ReferenceType) (obj.type())).allFields()).entrySet()) {
                                 if (fldFilter.test(f.getKey())) {
-                                    String value = dumpValue(f.getValue(), visited, depthLim - 1);
-                                    // System.out.println("field " + f.getKey().name() + " -> " + value);
-                                    appendToFile(fldpt, curVal, f.getKey().name(), f.getKey().declaringType().name(), value);
+                                    if (f.getKey().isStatic()) {
+                                        if (visited.add((long)(obj.type().signature().hashCode()) * 1000000 + f.getKey().hashCode())) {
+                                            Value staticVal = ((ReferenceType) obj.type()).getValue(f.getKey());
+                                            String value = dumpValue(staticVal, visited, depthLim - 1);
+                                            if (value != null) {
+                                                appendToFile(staticpt, f.getKey().name(), obj.type().name(), value);
+                                            }
+                                        }
+                                    } else {
+                                        String value = dumpValue(f.getValue(), visited, depthLim - 1);
+                                        // System.out.println("field " + f.getKey().name() + " -> " + value);
+                                        if (value != null) {
+                                            appendToFile(fldpt, curVal, f.getKey().name(), f.getKey().declaringType().name(), value);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -209,14 +234,14 @@ public class JDWPClient {
                     // System.out.println("val: " + curVal);
                     rv = curVal;
                 }
-            } else if (val != null) {
+            } else if (val != null && !(val instanceof PrimitiveValue)) {
                 rv = val.toString();
             } else {
-                rv = "null";
+                rv = null;
             }
             appendToFile(hobj, rv, immutable, rv);
         } catch (Exception e) {
-            rv = "null";
+            rv = null;
         }
         return rv;
     }
