@@ -6,6 +6,8 @@ import com.sun.jdi.event.BreakpointEvent;
 import com.sun.jdi.event.Event;
 import com.sun.jdi.event.EventQueue;
 import com.sun.jdi.event.EventSet;
+import com.sun.jdi.request.BreakpointRequest;
+import com.sun.jdi.request.EventRequest;
 import com.sun.tools.jdi.ArrayReferenceImpl;
 import com.sun.tools.jdi.ClassTypeImpl;
 import com.sun.tools.jdi.ObjectReferenceImpl;
@@ -75,16 +77,37 @@ public class JDWPClient {
         refSet = new HashSet<>();
     }
 
-    public void breakOnMethod(String className, String methodName) {
-        for (ReferenceType c : vm.allClasses()) {
-            if (c.name().equals(className)) {
-                for (Method m : c.allMethods()) {
-                    if (m.name().equals(methodName)) {
-                        vm.eventRequestManager().createBreakpointRequest(m.location()).setEnabled(true);
-                    }
-                }
+    public void setBreakpoint(Location loc) {
+        BreakpointRequest bp = vm.eventRequestManager().createBreakpointRequest(loc);
+        bp.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
+        bp.setEnabled(true);
+    }
+
+    public void breakOnMethod(String className, String methodName, boolean all) {
+        for (ReferenceType c : vm.classesByName(className)) {
+            try {
+                c.methodsByName(methodName).stream().filter(method -> all || method.declaringType().name().equals(className)).forEach(m -> {
+                    setBreakpoint(m.location());
+                    System.out.println("Set breakpoint on " + className + ":" + methodName);
+                });
+            } catch (Exception e) {
+                System.out.println("Failed to set breakpoint on " + className + ":" + methodName + " because of: " + e.getMessage());
             }
         }
+    }
+
+    public void flush() {
+        cge.flush();
+        reach.flush();
+        vpt.flush();
+        ctx.flush();
+        fldpt.flush();
+        hobj.flush();
+        halloc.flush();
+        arrpt.flush();
+        methinvo.flush();
+        staticpt.flush();
+        strheap.flush();
     }
 
     public void close() {
@@ -99,7 +122,7 @@ public class JDWPClient {
         methinvo.close();
         staticpt.close();
         strheap.close();
-        System.out.println("Shutting down...");
+        System.out.println("Cleanup finished!");
     }
 
     public static Optional<String> getMethodName(Method m) {
@@ -208,12 +231,14 @@ public class JDWPClient {
             try {
                 EventSet eventSet = eventQueue.remove();
                 for (Event e : eventSet) {
-                    if (e instanceof BreakpointEvent) { // todo test
+                    if (e instanceof BreakpointEvent) {
                         ThreadReference thread = ((BreakpointEvent) e).thread();
                         System.out.println("Break on: " + thread.frame(0).location().method());
                         dumpThread(thread);
+                        System.out.println("Thread dumped!");
                     }
                 }
+                flush();
                 eventSet.resume();
             } catch (Exception e) {
                 e.printStackTrace();
