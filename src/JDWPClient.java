@@ -13,6 +13,7 @@ import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.text.DecimalFormat;
 import java.util.*;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -28,10 +29,10 @@ public class JDWPClient {
     private static PrintWriter fldpt;
     private static PrintWriter hobj;
     private static PrintWriter halloc;
-    private static PrintWriter arrpt; // todo
-    private static PrintWriter staticpt; // todo
-    private static PrintWriter strheap; // todo
+    private static PrintWriter arrpt;
+    private static PrintWriter staticpt;
     private Set<Long> refSet;
+    private DecimalFormat df;
 
     public VirtualMachine vm;
 
@@ -49,6 +50,8 @@ public class JDWPClient {
         args.get("port").setValue(Integer.toString(port));
 
         resetRefs();
+        df = new DecimalFormat();
+        df.setMaximumFractionDigits(2);
         fldFilter = x -> true;
         stackFrameFilter = x -> true;
         depthLim = 1000;
@@ -62,7 +65,6 @@ public class JDWPClient {
         halloc = new PrintWriter(new BufferedWriter(new FileWriter("DynamicNormalHeapAllocation.facts", append)));
         arrpt = new PrintWriter(new BufferedWriter(new FileWriter("DynamicArrayIndexPointsTo.facts", append)));
         staticpt = new PrintWriter(new BufferedWriter(new FileWriter("DynamicStaticFieldPointsTo.facts", append)));
-        strheap = new PrintWriter(new BufferedWriter(new FileWriter("DynamicStringHeapObject.facts", append)));
 
         vm = connector.attach(args);
         // todo figure this out
@@ -102,7 +104,6 @@ public class JDWPClient {
         halloc.flush();
         arrpt.flush();
         staticpt.flush();
-        strheap.flush();
     }
 
     public void close() {
@@ -115,7 +116,6 @@ public class JDWPClient {
         halloc.close();
         arrpt.close();
         staticpt.close();
-        strheap.close();
         System.out.println("Cleanup finished!");
     }
 
@@ -132,37 +132,47 @@ public class JDWPClient {
     }
 
     public void dumpThread(ThreadReference thread) {
-        thread.suspend();
         try {
             List<StackFrame> frames = thread.frames();
 
             Iterator<StackFrame> iter1 = frames.iterator();
             Iterator<StackFrame> iter2 = frames.iterator();
             iter2.next();
+            long t0 = System.currentTimeMillis();
+            System.out.print("\tDumping callgraph edges from stack trace... ");
             while (iter2.hasNext()) {
                 Location from = iter2.next().location();
                 Location to = iter1.next().location();
                 appendToFile(cge, getMethodName(from.method()).get(), from.lineNumber(), getMethodName(to.method()).get(), immutable, immutable);
             }
+            System.out.println("Done (" + df.format((System.currentTimeMillis() - t0)/1000.0f) + " sec)");
 
             frames.forEach(frame -> appendToFile(reach, getMethodName(frame.location().method()).get()));
-            frames.stream().filter(stackFrameFilter).forEach(this::dumpLocals);
+            List<StackFrame> framesToDump = frames.stream().filter(stackFrameFilter).collect(Collectors.toList());
+            for (int i = 0; i < framesToDump.size(); i++) {
+                System.out.println("\tDumping frame " + (i+1) + " of " + framesToDump.size());
+                dumpLocals(framesToDump.get(i));
+            }
         } catch (IncompatibleThreadStateException e) {
             e.printStackTrace();
         }
-        thread.resume();
     }
 
     public void dumpLocals(StackFrame frame) {
         try {
             Map<LocalVariable, Value> varMap = frame.getValues(frame.visibleVariables());
+            long t0 = System.currentTimeMillis();
+            System.out.print("\tDumping fields of 'this' object... ");
             String thisRep = dumpValue(frame.thisObject(), refSet, depthLim);
             if (thisRep != null) {
                 String thisVarName = getVarName(frame, "@this").get();
                 appendToFile(vpt, immutable, thisRep, immutable, thisVarName);
             }
+            System.out.println("Done (" + df.format((System.currentTimeMillis() - t0)/1000.0f) + " sec)");
             ListIterator<Value> argIter = frame.getArgumentValues().listIterator();
             // todo test params
+            t0 = System.currentTimeMillis();
+            System.out.print("\tDumping values reached by variables... ");
             while (argIter.hasNext()) {
                 int parIdx = argIter.nextIndex();
                 String paramRep = dumpValue(argIter.next(), refSet, depthLim);
@@ -180,6 +190,7 @@ public class JDWPClient {
                     appendToFile(vpt, immutable, valRep, immutable, varName);
                 }
             });
+            System.out.println("Done (" + df.format((System.currentTimeMillis() - t0)/1000.0f) + " sec)");
         } catch (AbsentInformationException e) {}
     }
 
@@ -199,6 +210,8 @@ public class JDWPClient {
                             String avRef = dumpValue(av, visited, depthLim - 1);
                             if (avRef != null) {
                                 appendToFile(arrpt, curVal, avRef);
+                                // todo balance this out (break after 10 or so?)
+                                break;
                             }
                         }
                     }
@@ -260,7 +273,7 @@ public class JDWPClient {
                         ThreadReference thread = ((BreakpointEvent) e).thread();
                         System.out.println("Break on: " + thread.frame(0).location().method());
                         dumpThread(thread);
-                        System.out.println("Thread dumped!");
+                        System.out.println("Thread dump finished");
                     }
                 }
                 flush();
