@@ -17,7 +17,7 @@ public class Main {
                     cl.name().toLowerCase().contains("xalan") || cl.name().toLowerCase().contains("dacapo"))
                 .forEach(referenceType -> referenceType.allMethods()
                     .forEach(method -> {
-                        if (method.isNative() && method.declaringType().name().equals(referenceType.name()))
+                        if ((!method.isNative()) && method.declaringType().name().equals(referenceType.name()))
                            client.setBreakpoint(method.location(), 200);
                     })
                 );
