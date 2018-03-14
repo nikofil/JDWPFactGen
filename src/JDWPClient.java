@@ -17,6 +17,7 @@ import java.text.DecimalFormat;
 import java.util.*;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class JDWPClient {
 
@@ -33,6 +34,7 @@ public class JDWPClient {
     private static PrintWriter staticpt;
     private Set<Long> refSet;
     private DecimalFormat df;
+    private Map<Location, Long> bpLimit;
 
     public VirtualMachine vm;
 
@@ -46,6 +48,7 @@ public class JDWPClient {
                 c -> c.name().equals("com.sun.jdi.SocketAttach")).
                 findFirst().get();
         Map<String, Connector.Argument> args = connector.defaultArguments();
+        bpLimit = new HashMap<>();
         args.get("hostname").setValue(host);
         args.get("port").setValue(Integer.toString(port));
 
@@ -75,17 +78,23 @@ public class JDWPClient {
         refSet = new HashSet<>();
     }
 
-    public void setBreakpoint(Location loc) {
+    public void setBreakpoint(Location loc, long times) {
+        if (loc == null) {
+            return;
+        }
         BreakpointRequest bp = vm.eventRequestManager().createBreakpointRequest(loc);
         bp.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
+        bpLimit.put(loc, times);
         bp.setEnabled(true);
     }
 
-    public void breakOnMethod(String className, String methodName, boolean all) {
+    public void breakOnMethod(String className, String methodName, long times, boolean all) {
         for (ReferenceType c : vm.classesByName(className)) {
             try {
                 c.methodsByName(methodName).stream().filter(method -> all || method.declaringType().name().equals(className)).forEach(m -> {
-                    setBreakpoint(m.location());
+                    if (times != -1) {
+                        setBreakpoint(m.location(), times);
+                    }
                     System.out.println("Set breakpoint on " + className + ":" + methodName);
                 });
             } catch (Exception e) {
@@ -143,11 +152,17 @@ public class JDWPClient {
             while (iter2.hasNext()) {
                 Location from = iter2.next().location();
                 Location to = iter1.next().location();
-                appendToFile(cge, getMethodName(from.method()).get(), from.lineNumber(), getMethodName(to.method()).get(), immutable, immutable);
+                getMethodName(from.method()).ifPresent(fromName ->
+                    getMethodName(to.method()).ifPresent(toName ->
+                        appendToFile(cge, fromName, from.lineNumber(), toName, immutable, immutable)
+                    )
+                );
             }
             System.out.println("Done (" + df.format((System.currentTimeMillis() - t0)/1000.0f) + " sec)");
 
-            frames.forEach(frame -> appendToFile(reach, getMethodName(frame.location().method()).get()));
+            frames.forEach(frame -> getMethodName(frame.location().method()).ifPresent(
+                s -> appendToFile(reach, s)
+            ));
             List<StackFrame> framesToDump = frames.stream().filter(stackFrameFilter).collect(Collectors.toList());
             for (int i = 0; i < framesToDump.size(); i++) {
                 System.out.println("\tDumping frame " + (i+1) + " of " + framesToDump.size());
@@ -165,8 +180,7 @@ public class JDWPClient {
             System.out.print("\tDumping fields of 'this' object... ");
             String thisRep = dumpValue(frame.thisObject(), refSet, depthLim);
             if (thisRep != null) {
-                String thisVarName = getVarName(frame, "@this").get();
-                appendToFile(vpt, immutable, thisRep, immutable, thisVarName);
+                getVarName(frame, "@this").ifPresent(thisVarName -> appendToFile(vpt, immutable, thisRep, immutable, thisVarName));
             }
             System.out.println("Done (" + df.format((System.currentTimeMillis() - t0)/1000.0f) + " sec)");
             ListIterator<Value> argIter = frame.getArgumentValues().listIterator();
@@ -177,18 +191,19 @@ public class JDWPClient {
                 int parIdx = argIter.nextIndex();
                 String paramRep = dumpValue(argIter.next(), refSet, depthLim);
                 if (paramRep != null) {
-                    String paramName = getVarName(frame, "@parameter" + parIdx).get();
-                    appendToFile(vpt, immutable, paramRep, immutable, paramName);
+                    getVarName(frame, "@parameter" + parIdx).ifPresent(
+                            paramName -> appendToFile(vpt, immutable, paramRep, immutable, paramName));
                 }
             }
             varMap.forEach((var, val) -> {
                 // System.out.println(varName + " -> " + val.toString());
                 // todo do smth with contexts?
                 String valRep = dumpValue(val, refSet, depthLim);
-                String varName = getVarName(frame, var.name()).get();
-                if (valRep != null) {
-                    appendToFile(vpt, immutable, valRep, immutable, varName);
-                }
+                getVarName(frame, var.name()).ifPresent(varName -> {
+                    if (valRep != null) {
+                        appendToFile(vpt, immutable, valRep, immutable, varName);
+                    }
+                });
             });
             System.out.println("Done (" + df.format((System.currentTimeMillis() - t0)/1000.0f) + " sec)");
         } catch (AbsentInformationException e) {}
@@ -263,24 +278,90 @@ public class JDWPClient {
         p.println(Arrays.stream(fields).map(o -> o.toString().replace('\t', ' ')).collect(Collectors.joining("\t")));
     }
 
+    public synchronized void dumpAllThreads(Predicate<ThreadReference> threadFilter) {
+        Stream<ThreadReference> threads = vm.allThreads().stream().filter(threadFilter);
+        threads.forEach(ThreadReference::suspend);
+        threads.forEach(this::dumpThread);
+        threads.forEach(ThreadReference::resume);
+        flush();
+    }
+
+    public void dumpAllEvery(long ms, Predicate<ThreadReference> threadFilter) {
+        new Thread(() -> {
+            try {
+                while (true) {
+                    try {
+                        Thread.sleep(ms);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                    dumpAllThreads(threadFilter);
+                }
+            } catch (Exception e) {
+                System.out.println("Worker exception: " + e.getMessage());
+            }
+        }).start();
+    }
+
     public void handleEvents() {
         EventQueue eventQueue = vm.eventQueue();
         while (true) {
+            EventSet eventSet = null;
             try {
-                EventSet eventSet = eventQueue.remove();
-                for (Event e : eventSet) {
-                    if (e instanceof BreakpointEvent) {
-                        ThreadReference thread = ((BreakpointEvent) e).thread();
-                        System.out.println("Break on: " + thread.frame(0).location().method());
-                        dumpThread(thread);
-                        System.out.println("Thread dump finished");
+                eventSet = eventQueue.remove();
+                synchronized (this) {
+                    for (Event e : eventSet) {
+                        if (e instanceof BreakpointEvent) {
+                            Location loc = ((BreakpointEvent) e).location();
+                            Long count = bpLimit.get(loc);
+                            if (count != null) {
+                                count--;
+                                if (count > 0) {
+                                    bpLimit.put(loc, count);
+                                } else {
+                                    e.request().disable();
+                                    bpLimit.remove(loc);
+                                }
+                            }
+                            System.out.println("Break on: " + loc);
+                            dumpThread(((BreakpointEvent) e).thread());
+                            System.out.println("Thread dump finished");
+                        }
                     }
                 }
-                flush();
-                eventSet.resume();
             } catch (Exception e) {
+                if (e instanceof VMDisconnectedException) {
+                    return;
+                }
                 e.printStackTrace();
+            } finally {
+                flush();
+                if (eventSet != null) {
+                    eventSet.resume();
+                }
             }
         }
+    }
+
+    public synchronized void waitForClass(String clsName, long timestep) {
+        vm.allThreads().forEach(ThreadReference::suspend);
+        while (vm.classesByName(clsName).size() == 0) {
+            vm.allThreads().forEach(ThreadReference::resume);
+            try {
+                Thread.sleep(timestep);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            vm.allThreads().forEach(ThreadReference::suspend);
+        }
+        vm.allThreads().forEach(ThreadReference::resume);
+    }
+
+    public synchronized void suspendAll() {
+        vm.allThreads().forEach(ThreadReference::suspend);
+    }
+
+    public synchronized void resumeAll() {
+        vm.allThreads().forEach(ThreadReference::resume);
     }
 }
