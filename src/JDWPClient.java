@@ -9,10 +9,7 @@ import com.sun.jdi.event.EventSet;
 import com.sun.jdi.request.BreakpointRequest;
 import com.sun.jdi.request.EventRequest;
 
-import java.io.BufferedWriter;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.PrintWriter;
+import java.io.*;
 import java.text.DecimalFormat;
 import java.util.*;
 import java.util.function.Predicate;
@@ -59,15 +56,16 @@ public class JDWPClient {
         stackFrameFilter = x -> true;
         depthLim = 1000;
 
-        cge = new PrintWriter(new BufferedWriter(new FileWriter("DynamicCallGraphEdge.facts", append)));
-        reach = new PrintWriter(new BufferedWriter(new FileWriter("DynamicReachableMethod.facts", append)));
-        vpt = new PrintWriter(new BufferedWriter(new FileWriter("DynamicVarPointsTo.facts", append)));
-        ctx = new PrintWriter(new BufferedWriter(new FileWriter("DynamicContext.facts", append)));
-        fldpt = new PrintWriter(new BufferedWriter(new FileWriter("DynamicInstanceFieldPointsTo.facts", append)));
-        hobj = new PrintWriter(new BufferedWriter(new FileWriter("DynamicNormalHeapObject.facts", append)));
-        halloc = new PrintWriter(new BufferedWriter(new FileWriter("DynamicNormalHeapAllocation.facts", append)));
-        arrpt = new PrintWriter(new BufferedWriter(new FileWriter("DynamicArrayIndexPointsTo.facts", append)));
-        staticpt = new PrintWriter(new BufferedWriter(new FileWriter("DynamicStaticFieldPointsTo.facts", append)));
+        new File("facts").mkdir();
+        cge = new PrintWriter(new BufferedWriter(new FileWriter("facts/DynamicCallGraphEdge.facts", append)));
+        reach = new PrintWriter(new BufferedWriter(new FileWriter("facts/DynamicReachableMethod.facts", append)));
+        vpt = new PrintWriter(new BufferedWriter(new FileWriter("facts/DynamicVarPointsTo.facts", append)));
+        ctx = new PrintWriter(new BufferedWriter(new FileWriter("facts/DynamicContext.facts", append)));
+        fldpt = new PrintWriter(new BufferedWriter(new FileWriter("facts/DynamicInstanceFieldPointsTo.facts", append)));
+        hobj = new PrintWriter(new BufferedWriter(new FileWriter("facts/DynamicNormalHeapObject.facts", append)));
+        halloc = new PrintWriter(new BufferedWriter(new FileWriter("facts/DynamicNormalHeapAllocation.facts", append)));
+        arrpt = new PrintWriter(new BufferedWriter(new FileWriter("facts/DynamicArrayIndexPointsTo.facts", append)));
+        staticpt = new PrintWriter(new BufferedWriter(new FileWriter("facts/DynamicStaticFieldPointsTo.facts", append)));
 
         vm = connector.attach(args);
         // todo figure this out
