@@ -36,6 +36,7 @@ public class JDWPClient {
     public VirtualMachine vm;
 
     public int depthLim; // depth limit for visiting object fields
+    public int arrayLim; // limit for number of elements of arrays to dump
     public Predicate<Field> fldFilter; // filter for dumping fields
     public Predicate<StackFrame> stackFrameFilter; // filter for dumping stack frames
 
@@ -138,15 +139,17 @@ public class JDWPClient {
         return getMethodName(frame.location().method()).map(s -> s + "/" + var);
     }
 
-    public void dumpThread(ThreadReference thread) {
+    public synchronized void dumpThread(ThreadReference thread) {
         try {
             List<StackFrame> frames = thread.frames();
 
             Iterator<StackFrame> iter1 = frames.iterator();
             Iterator<StackFrame> iter2 = frames.iterator();
+            if (!iter2.hasNext()) {
+                return;
+            }
             iter2.next();
             long t0 = System.currentTimeMillis();
-            System.out.print("\tDumping callgraph edges from stack trace... ");
             while (iter2.hasNext()) {
                 Location from = iter2.next().location();
                 Location to = iter1.next().location();
@@ -156,18 +159,18 @@ public class JDWPClient {
                     )
                 );
             }
-            System.out.println("Done (" + df.format((System.currentTimeMillis() - t0)/1000.0f) + " sec)");
 
             frames.forEach(frame -> getMethodName(frame.location().method()).ifPresent(
                 s -> appendToFile(reach, s)
             ));
             List<StackFrame> framesToDump = frames.stream().filter(stackFrameFilter).collect(Collectors.toList());
             for (int i = 0; i < framesToDump.size(); i++) {
-                System.out.println("\tDumping frame " + (i+1) + " of " + framesToDump.size());
                 dumpLocals(framesToDump.get(i));
             }
         } catch (IncompatibleThreadStateException e) {
             e.printStackTrace();
+        } catch (InternalException e) {
+            System.out.println(e.getMessage());
         }
     }
 
@@ -175,16 +178,13 @@ public class JDWPClient {
         try {
             Map<LocalVariable, Value> varMap = frame.getValues(frame.visibleVariables());
             long t0 = System.currentTimeMillis();
-            System.out.print("\tDumping fields of 'this' object... ");
             String thisRep = dumpValue(frame.thisObject(), refSet, depthLim);
             if (thisRep != null) {
                 getVarName(frame, "@this").ifPresent(thisVarName -> appendToFile(vpt, immutable, thisRep, immutable, thisVarName));
             }
-            System.out.println("Done (" + df.format((System.currentTimeMillis() - t0)/1000.0f) + " sec)");
             ListIterator<Value> argIter = frame.getArgumentValues().listIterator();
             // todo test params
             t0 = System.currentTimeMillis();
-            System.out.print("\tDumping values reached by variables... ");
             while (argIter.hasNext()) {
                 int parIdx = argIter.nextIndex();
                 String paramRep = dumpValue(argIter.next(), refSet, depthLim);
@@ -199,11 +199,10 @@ public class JDWPClient {
                 String valRep = dumpValue(val, refSet, depthLim);
                 getVarName(frame, var.name()).ifPresent(varName -> {
                     if (valRep != null) {
-                        appendToFile(vpt, immutable, valRep, immutable, varName);
+                        appendToFile(vpt, immutable, valRep, immutable, varName + "#");
                     }
                 });
             });
-            System.out.println("Done (" + df.format((System.currentTimeMillis() - t0)/1000.0f) + " sec)");
         } catch (AbsentInformationException e) {}
     }
 
@@ -219,12 +218,14 @@ public class JDWPClient {
                     ArrayReference arr = (ArrayReference) val;
                     String curVal = arr.type().name() + "@" + arr.uniqueID();
                     if (visited.add(hashObj(arr)) && !(((ArrayType)arr.type()).componentType() instanceof PrimitiveType)) {
+                        int acount = 0;
                         for (Value av : arr.getValues()) {
                             String avRef = dumpValue(av, visited, depthLim - 1);
                             if (avRef != null) {
                                 appendToFile(arrpt, curVal, avRef);
-                                // todo balance this out (break after 10 or so?)
-                                break;
+                                if (++acount == arrayLim) {
+                                    break;
+                                }
                             }
                         }
                     }
@@ -277,7 +278,7 @@ public class JDWPClient {
     }
 
     public synchronized void dumpAllThreads(Predicate<ThreadReference> threadFilter) {
-        Stream<ThreadReference> threads = vm.allThreads().stream().filter(threadFilter);
+        List<ThreadReference> threads = vm.allThreads().stream().filter(threadFilter).collect(Collectors.toList());
         threads.forEach(ThreadReference::suspend);
         threads.forEach(this::dumpThread);
         threads.forEach(ThreadReference::resume);
@@ -293,10 +294,13 @@ public class JDWPClient {
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }
+                    System.out.println("Dumping all threads...");
                     dumpAllThreads(threadFilter);
+                    System.out.println("All threads dumped");
                 }
             } catch (Exception e) {
-                System.out.println("Worker exception: " + e.getMessage());
+                System.out.println("Worker exception:");
+                e.printStackTrace();
             }
         }).start();
     }
@@ -313,17 +317,16 @@ public class JDWPClient {
                             Location loc = ((BreakpointEvent) e).location();
                             Long count = bpLimit.get(loc);
                             if (count != null) {
-                                count--;
                                 if (count > 0) {
+                                    count--;
                                     bpLimit.put(loc, count);
                                 } else {
                                     e.request().disable();
-                                    bpLimit.remove(loc);
+                                    continue;
                                 }
                             }
-                            System.out.println("Break on: " + loc);
+                            System.out.println("Break on: " + loc + " (" + count + " remaining)");
                             dumpThread(((BreakpointEvent) e).thread());
-                            System.out.println("Thread dump finished");
                         }
                     }
                 }
