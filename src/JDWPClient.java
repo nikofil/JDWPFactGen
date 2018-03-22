@@ -183,7 +183,6 @@ public class JDWPClient {
                 getVarName(frame, "@this").ifPresent(thisVarName -> appendToFile(vpt, immutable, thisRep, immutable, thisVarName));
             }
             ListIterator<Value> argIter = frame.getArgumentValues().listIterator();
-            // todo test params
             t0 = System.currentTimeMillis();
             while (argIter.hasNext()) {
                 int parIdx = argIter.nextIndex();
