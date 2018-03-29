@@ -25,6 +25,8 @@ public class Main {
                 //);
 
             // client.breakOnMethod("org.alfresco.repo.web.scripts.comments.CommentsPost", "executeImpl", 10, false);
+            System.out.println("setting bps for tracking allocations");
+            client.vm.allClasses().forEach(client::trackAllocation);
             System.out.println("dumping...");
             client.dumpAllThreads((x) -> true);
             System.out.println("dumped!");
@@ -34,7 +36,6 @@ public class Main {
                 Thread.sleep(60000);
             } catch(Exception e) {}
             client.suspendAll();
-            client.vm.allClasses().forEach(client::trackAllocation);
             client.vm.allClasses()
                 .stream()
                 .filter(ReferenceType::isPrepared)

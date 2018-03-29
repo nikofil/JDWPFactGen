@@ -30,6 +30,7 @@ public class JDWPClient {
     private static PrintWriter arrpt;
     private static PrintWriter staticpt;
     private Set<Long> refSet;
+    private Set<String> allocTracking;
     private DecimalFormat df;
     private Map<Location, Long> bpLimit;
 
@@ -47,6 +48,7 @@ public class JDWPClient {
                 findFirst().get();
         Map<String, Connector.Argument> args = connector.defaultArguments();
         bpLimit = new HashMap<>();
+        allocTracking = new HashSet<>();
         args.get("hostname").setValue(host);
         args.get("port").setValue(Integer.toString(port));
 
@@ -83,7 +85,9 @@ public class JDWPClient {
         }
         BreakpointRequest bp = vm.eventRequestManager().createBreakpointRequest(loc);
         bp.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
-        bpLimit.put(loc, times);
+        if (times > 0) {
+            bpLimit.put(loc, times);
+        }
         bp.setEnabled(true);
     }
 
@@ -314,18 +318,25 @@ public class JDWPClient {
                     for (Event e : eventSet) {
                         if (e instanceof BreakpointEvent) {
                             Location loc = ((BreakpointEvent) e).location();
-                            Long count = bpLimit.get(loc);
-                            if (count != null) {
-                                if (count > 0) {
-                                    count--;
-                                    bpLimit.put(loc, count);
-                                } else {
-                                    e.request().disable();
-                                    continue;
+                            ThreadReference thread = ((BreakpointEvent) e).thread();
+                            if (allocTracking.contains(loc.toString())) {
+                                if (thread.frameCount() > 2) {
+                                    System.out.println("new " + thread.frame(0).thisObject().referenceType() + " in :" + thread.frame(1).location());
                                 }
+                            } else {
+                                Long count = bpLimit.get(loc);
+                                if (count != null) {
+                                    if (count > 0) {
+                                        count--;
+                                        bpLimit.put(loc, count);
+                                    } else {
+                                        e.request().disable();
+                                        continue;
+                                    }
+                                }
+                                System.out.println("Break on: " + loc + " (" + count + " remaining)");
+                                dumpThread(thread);
                             }
-                            System.out.println("Break on: " + loc + " (" + count + " remaining)");
-                            dumpThread(((BreakpointEvent) e).thread());
                         }
                     }
                 }
@@ -366,6 +377,11 @@ public class JDWPClient {
     }
 
     public void trackAllocation(ReferenceType ref) {
-        ref.methodsByName("<init>").forEach(method -> System.out.println(method.location()));
+        ref.methodsByName("<init>").forEach(method -> {
+            if (!method.isNative()) {
+                allocTracking.add(method.location().toString());
+                setBreakpoint(method.location(), 0);
+            }
+        });
     }
 }
