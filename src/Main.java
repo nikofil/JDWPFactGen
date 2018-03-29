@@ -31,9 +31,10 @@ public class Main {
             client.dumpAllEvery(600000, (x) -> true);
             client.resumeAll();
             try{
-        Thread.sleep(60000);
+                Thread.sleep(60000);
             } catch(Exception e) {}
             client.suspendAll();
+            client.vm.allClasses().forEach(client::trackAllocation);
             client.vm.allClasses()
                 .stream()
                 .filter(ReferenceType::isPrepared)

@@ -364,4 +364,8 @@ public class JDWPClient {
     public synchronized void resumeAll() {
         vm.allThreads().forEach(ThreadReference::resume);
     }
+
+    public void trackAllocation(ReferenceType ref) {
+        ref.methodsByName("<init>").forEach(method -> System.out.println(method.location()));
+    }
 }
