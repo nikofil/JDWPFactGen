@@ -320,22 +320,29 @@ public class JDWPClient {
                             Location loc = ((BreakpointEvent) e).location();
                             ThreadReference thread = ((BreakpointEvent) e).thread();
                             if (allocTracking.contains(loc.toString())) {
-                                if (thread.frameCount() > 2) {
-                                    System.out.println("new " + thread.frame(0).thisObject().referenceType() + " in :" + thread.frame(1).location());
-                                }
-                            } else {
-                                Long count = bpLimit.get(loc);
-                                if (count != null) {
-                                    if (count > 0) {
-                                        count--;
-                                        bpLimit.put(loc, count);
-                                    } else {
-                                        e.request().disable();
-                                        continue;
+                                try {
+                                    if (thread.frameCount() > 2) {
+                                        StackFrame f0 = thread.frame(0);
+                                        StackFrame f1 = thread.frame(1);
+                                        ObjectReference thisObj = f0.thisObject();
+                                        if (!thisObj.equals(f1.thisObject())) {
+                                            System.out.println("new " + f0.thisObject().referenceType() + " in :" + f1.location());
+                                        }
                                     }
+                                } catch (IncompatibleThreadStateException e1) {
+                                    e1.printStackTrace();
                                 }
-                                System.out.println("Break on: " + loc + " (" + count + " remaining)");
-                                dumpThread(thread);
+                            }
+                            Long count = bpLimit.get(loc);
+                            if (count != null) {
+                                if (count > 0) {
+                                    count--;
+                                    bpLimit.put(loc, count);
+                                    System.out.println("Break on: " + loc + " (" + count + " remaining)");
+                                    dumpThread(thread);
+                                } else {
+                                    e.request().disable();
+                                }
                             }
                         }
                     }

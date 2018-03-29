@@ -45,8 +45,6 @@ public class Main {
                     .forEach(method -> {
                         if ((!method.isNative()) && (method.declaringType().name().contains("alfresco") || method.declaringType().name().contains("apache"))) {
                            client.setBreakpoint(method.location(), 1);
-                           if (method.location() != null)
-                           System.out.println("hey bp " + method.location().toString());
                         }
                     })
                 );
