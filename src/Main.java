@@ -25,26 +25,30 @@ public class Main {
                 //);
 
             // client.breakOnMethod("org.alfresco.repo.web.scripts.comments.CommentsPost", "executeImpl", 10, false);
-            System.out.println("setting bps for tracking allocations");
-            client.vm.allClasses().forEach(client::trackAllocation);
             System.out.println("dumping...");
             client.dumpAllThreads((x) -> true);
             System.out.println("dumped!");
             client.dumpAllEvery(600000, (x) -> true);
-            client.resumeAll();
+            //client.resumeAll();
             try{
                 Thread.sleep(60000);
             } catch(Exception e) {}
             client.suspendAll();
+            System.out.println("setting bps for tracking allocations");
+            client.vm.allClasses().stream().filter(ReferenceType::isPrepared).
+                filter(cl -> cl.name().toLowerCase().contains("alfresco") && (cl.name().toLowerCase().contains("service") || cl.name().toLowerCase().contains("script"))).
+                    forEach(client::trackAllocation);
+            System.out.println("done");
             client.vm.allClasses()
                 .stream()
                 .filter(ReferenceType::isPrepared)
                 .filter(cl ->
-                    cl.name().toLowerCase().contains("alfresco") && cl.name().toLowerCase().contains(".web.") && !cl.name().toLowerCase().contains("mozilla"))
+                    cl.name().toLowerCase().contains("alfresco") && cl.name().toLowerCase().contains(".scripts.") && !cl.name().toLowerCase().contains("mozilla"))
                 .forEach(referenceType -> referenceType.allMethods()
                     .forEach(method -> {
                         if ((!method.isNative()) && (method.declaringType().name().contains("alfresco") || method.declaringType().name().contains("apache"))) {
                            client.setBreakpoint(method.location(), 1);
+                           System.out.println("break on " + method.location());
                         }
                     })
                 );

@@ -385,7 +385,7 @@ public class JDWPClient {
 
     public void trackAllocation(ReferenceType ref) {
         ref.methodsByName("<init>").forEach(method -> {
-            if (!method.isNative()) {
+            if (method.declaringType().equals(ref) && !method.isNative()) {
                 allocTracking.add(method.location().toString());
                 setBreakpoint(method.location(), 0);
             }
