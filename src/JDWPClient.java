@@ -33,6 +33,7 @@ public class JDWPClient {
     private Set<String> allocTracking;
     private DecimalFormat df;
     private Map<Location, Long> bpLimit;
+    private Map<Long, Location> allocLocation;
 
     public VirtualMachine vm;
 
@@ -48,6 +49,7 @@ public class JDWPClient {
                 findFirst().get();
         Map<String, Connector.Argument> args = connector.defaultArguments();
         bpLimit = new HashMap<>();
+        allocLocation = new HashMap<>();
         allocTracking = new HashSet<>();
         args.get("hostname").setValue(host);
         args.get("port").setValue(Integer.toString(port));
@@ -236,7 +238,8 @@ public class JDWPClient {
                 } else {
                     ObjectReference obj = (ObjectReference) val;
                     String curVal = obj.type().name() + "@" + obj.uniqueID();
-                    if (visited.add(hashObj(obj))) {
+                    long hashVal = hashObj(obj);
+                    if (visited.add(hashVal)) {
                         if (depthLim > 0) {
                             for (Map.Entry<Field, Value> f : obj.getValues(((ReferenceType) (obj.type())).allFields()).entrySet()) {
                                 if (fldFilter.test(f.getKey())) {
@@ -259,7 +262,12 @@ public class JDWPClient {
                             }
                         }
                         // todo can improve this? (alloc line and method)
-                        appendToFile(halloc, 0, "?", obj.type().name(), curVal);
+                        Location alloc = allocLocation.get(hashVal);
+                        if (alloc != null) {
+                            appendToFile(halloc, alloc.lineNumber(), getMethodName(alloc.method()), obj.type().name(), curVal);
+                        } else {
+                            appendToFile(halloc, 0, "Unknown", obj.type().name(), curVal);
+                        }
                     }
                     // System.out.println("val: " + curVal);
                     rv = curVal;
@@ -326,7 +334,8 @@ public class JDWPClient {
                                         StackFrame f1 = thread.frame(1);
                                         ObjectReference thisObj = f0.thisObject();
                                         if (!thisObj.equals(f1.thisObject())) {
-                                            System.out.println("new " + f0.thisObject().referenceType() + " in :" + f1.location());
+                                            allocLocation.put(hashObj(f0.thisObject()), f1.location());
+//                                            System.out.println("new " + f0.thisObject().referenceType() + " in :" + f1.location());
                                         }
                                     }
                                 } catch (IncompatibleThreadStateException e1) {
