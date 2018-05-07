@@ -38,6 +38,7 @@ public class JDWPClient {
     public VirtualMachine vm;
 
     public int depthLim; // depth limit for visiting object fields
+    public int stackFrameLim; // max number of stack frames to dump
     public int arrayLim; // limit for number of elements of arrays to dump
     public Predicate<Field> fldFilter; // filter for dumping fields
     public Predicate<StackFrame> stackFrameFilter; // filter for dumping stack frames
@@ -60,6 +61,7 @@ public class JDWPClient {
         fldFilter = x -> true;
         stackFrameFilter = x -> true;
         depthLim = 1000;
+        stackFrameLim = 100;
 
         new File("facts").mkdir();
         cge = new PrintWriter(new BufferedWriter(new FileWriter("facts/DynamicCallGraphEdge.facts", append)));
@@ -156,6 +158,7 @@ public class JDWPClient {
             }
             iter2.next();
             long t0 = System.currentTimeMillis();
+            int ifr = 0;
             while (iter2.hasNext()) {
                 Location from = iter2.next().location();
                 Location to = iter1.next().location();
@@ -164,6 +167,9 @@ public class JDWPClient {
                         appendToFile(cge, fromName, from.lineNumber(), toName, immutable, immutable)
                     )
                 );
+                if (++ifr == stackFrameLim) {
+                    break;
+                }
             }
 
             frames.forEach(frame -> getMethodName(frame.location().method()).ifPresent(
@@ -171,6 +177,9 @@ public class JDWPClient {
             ));
             List<StackFrame> framesToDump = frames.stream().filter(stackFrameFilter).collect(Collectors.toList());
             for (int i = 0; i < framesToDump.size(); i++) {
+                if (i == stackFrameLim) {
+                    break;
+                }
                 dumpLocals(framesToDump.get(i));
             }
         } catch (IncompatibleThreadStateException e) {
@@ -264,7 +273,7 @@ public class JDWPClient {
                         // todo can improve this? (alloc line and method)
                         Location alloc = allocLocation.get(hashVal);
                         if (alloc != null) {
-                            appendToFile(halloc, alloc.lineNumber(), getMethodName(alloc.method()), obj.type().name(), curVal);
+                            appendToFile(halloc, alloc.lineNumber(), getMethodName(alloc.method()).orElse("Unknown"), obj.type().name(), curVal);
                         } else {
                             appendToFile(halloc, 0, "Unknown", obj.type().name(), curVal);
                         }
@@ -333,9 +342,8 @@ public class JDWPClient {
                                         StackFrame f0 = thread.frame(0);
                                         StackFrame f1 = thread.frame(1);
                                         ObjectReference thisObj = f0.thisObject();
-                                        if (!thisObj.equals(f1.thisObject())) {
+                                        if (thisObj != null && !thisObj.equals(f1.thisObject())) {
                                             allocLocation.put(hashObj(f0.thisObject()), f1.location());
-//                                            System.out.println("new " + f0.thisObject().referenceType() + " in :" + f1.location());
                                         }
                                     }
                                 } catch (IncompatibleThreadStateException e1) {
@@ -395,8 +403,8 @@ public class JDWPClient {
     public void trackAllocation(ReferenceType ref) {
         ref.methodsByName("<init>").forEach(method -> {
             if (method.declaringType().equals(ref) && !method.isNative()) {
-                allocTracking.add(method.location().toString());
-                setBreakpoint(method.location(), 0);
+                if (allocTracking.add(method.location().toString()))
+                    setBreakpoint(method.location(), 0);
             }
         });
     }
