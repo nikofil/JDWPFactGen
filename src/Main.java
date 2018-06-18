@@ -7,9 +7,9 @@ public class Main {
     public static void main(String[] args) {
         try {
             final JDWPClient client = new JDWPClient("localhost", 5005, false);
-            client.depthLim = 100;
-            client.stackFrameLim = 50;
-            client.arrayLim = 30;
+            client.depthLim = 20;
+            client.stackFrameLim = 30;
+            client.arrayLim = 5;
             Runtime.getRuntime().addShutdownHook(new Thread(() -> client.close()));
             //client.waitForClass("org.apache.xalan.templates.ElemChoose", 300);
             //client.suspendAll();
@@ -40,19 +40,46 @@ public class Main {
                 //filter(cl -> cl.name().toLowerCase().startsWith("javax") || cl.name().startsWith("java.lang.String") || cl.name().startsWith("java.util.Hash") || cl.name().contains(".web.app.") || cl.name().contains(".repo.")).
                     //forEach(client::trackAllocation);
             System.out.println("done");
+            client.breakOnMethod("org.alfresco.web.ui.repo.component.shelf.UIClipboardShelfItem", "encodeBegin", 1, true);
+
             client.vm.allClasses()
                 .stream()
                 .filter(ReferenceType::isPrepared)
                 .filter(cl ->
-                    cl.name().toLowerCase().contains("alfresco") && (/*cl.name().toLowerCase().contains(".tag.") || cl.name().toLowerCase().contains(".web.ui.") || cl.name().toLowerCase().contains(".web.app.servlet")*/ cl.name().toLowerCase().contains(".webdav.")) && !cl.name().toLowerCase().contains("mozilla"))
+                    cl.name().toLowerCase().contains("servlet") && (cl.name().toLowerCase().contains("download"))/* && !cl.name().toLowerCase().contains("mozilla")*/)
                 .forEach(referenceType -> referenceType.allMethods()
                     .forEach(method -> {
-                        if ((!method.isNative()) && method.name().contains("executeImpl") && (method.declaringType().equals(referenceType) || method.declaringType().name().contains("apache"))) {
+                        if ((!method.isNative()) && (method.name().equals("generateBrowserURL") || method.name().equals("processDownloadRequest"))/* && (method.declaringType().equals(referenceType))*/) {
                            client.setBreakpoint(method.location(), 1);
                            System.out.println("break on " + method.location());
                         }
                     })
                 );
+            //client.breakOnMethod("javax.servlet.ServletRequest", "getParameter", 2, false);
+            //client.breakOnMethod("javax.servlet.ServletRequest", "getHeader", 2, false);
+            //client.breakOnMethod("javax.servlet.ServletRequest", "getParameterValues", 2, false);
+            //client.breakOnMethod("javax.servlet.http.HttpServletRequest", "getCookies", 2, false);
+            //client.breakOnMethod("javax.servlet.http.HttpServletRequest", "getHeader", 2, false);
+            //client.breakOnMethod("javax.servlet.http.HttpServletRequest", "getHeaders", 2, false);
+            //client.breakOnMethod("javax.servlet.http.HttpServletRequest", "getHeaderNames", 2, false);
+            //client.breakOnMethod("javax.servlet.http.HttpServletRequest", "getPathInfo", 2, false);
+            //client.breakOnMethod("javax.servlet.http.HttpServletRequest", "getPathTranslated", 2, false);
+            //client.breakOnMethod("javax.servlet.http.HttpServletRequest", "getQueryString", 2, false);
+            //client.breakOnMethod("javax.servlet.http.HttpServletRequest", "getRequestedSessionId", 2, false);
+            //client.breakOnMethod("javax.servlet.http.HttpServletRequest", "getRequestURI", 2, false);
+            //client.breakOnMethod("javax.servlet.http.HttpServletRequest", "getRequestURL", 2, false);
+            //client.breakOnMethod("javax.servlet.http.HttpServletRequest", "getServletPath", 2, false);
+            //client.breakOnMethod("javax.servlet.ServletRequest", "getAttribute", 2, false);
+            //client.breakOnMethod("javax.servlet.ServletRequest", "getAttributeNames", 2, false);
+            //client.breakOnMethod("javax.servlet.ServletRequest", "getInputStream", 2, false);
+            //client.breakOnMethod("javax.servlet.ServletRequest", "getParameter", 2, false);
+            //client.breakOnMethod("javax.servlet.ServletRequest", "getParameterNames", 2, false);
+            //client.breakOnMethod("javax.servlet.ServletRequest", "getParameterValues", 2, false);
+            //client.breakOnMethod("javax.servlet.ServletRequest", "getParameterMap", 2, false);
+            //client.breakOnMethod("javax.servlet.ServletRequest", "getServerName", 2, false);
+            //client.breakOnMethod("javax.servlet.ServletRequest", "getReader", 2, false);
+            //client.breakOnMethod("javax.servlet.ServletRequest", "getRemoteAddr", 2, false);
+            //client.breakOnMethod("javax.servlet.ServletRequest", "getRemoteHost", 2, false);
             System.out.println("done bping");
             client.resumeAll();
             client.handleEvents();
