@@ -2,11 +2,12 @@ import com.sun.jdi.*;
 import com.sun.jdi.connect.AttachingConnector;
 import com.sun.jdi.connect.Connector;
 import com.sun.jdi.connect.IllegalConnectorArgumentsException;
-import com.sun.jdi.event.BreakpointEvent;
+import com.sun.jdi.event.LocatableEvent;
 import com.sun.jdi.event.Event;
 import com.sun.jdi.event.EventQueue;
 import com.sun.jdi.event.EventSet;
 import com.sun.jdi.request.BreakpointRequest;
+import com.sun.jdi.request.MethodExitRequest;
 import com.sun.jdi.request.EventRequest;
 
 import java.io.*;
@@ -42,6 +43,7 @@ public class JDWPClient {
     public int arrayLim; // limit for number of elements of arrays to dump
     public Predicate<Field> fldFilter; // filter for dumping fields
     public Predicate<StackFrame> stackFrameFilter; // filter for dumping stack frames
+    public ClassLoadEvent classLoadHandler; // callback for handling class load events
 
     public JDWPClient(String host, int port, boolean append) throws IOException, IllegalConnectorArgumentsException {
         AttachingConnector connector = Bootstrap.virtualMachineManager().
@@ -60,6 +62,7 @@ public class JDWPClient {
         df.setMaximumFractionDigits(2);
         fldFilter = x -> true;
         stackFrameFilter = x -> true;
+        classLoadHandler = ref -> {};
         depthLim = 1000;
         stackFrameLim = 100;
 
@@ -77,6 +80,9 @@ public class JDWPClient {
         vm = connector.attach(args);
         // todo figure this out
         appendToFile(ctx, immutable, "<>", "<>", "<>", 0, "<>", 0);
+
+        // set BP on class load
+        breakOnMethod("java.lang.ClassLoader", "postDefineClass", 9999999, true);
     }
 
     public void resetRefs() {
@@ -108,6 +114,13 @@ public class JDWPClient {
                 System.out.println("Failed to set breakpoint on " + className + ":" + methodName + " because of: " + e.getMessage());
             }
         }
+    }
+
+    public void breakOnRefType(ReferenceType ref) {
+        MethodExitRequest me = vm.eventRequestManager().createMethodExitRequest();
+        me.addClassFilter(ref);
+        me.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
+        me.setEnabled(true);
     }
 
     public void flush() {
@@ -333,10 +346,15 @@ public class JDWPClient {
                 eventSet = eventQueue.remove();
                 synchronized (this) {
                     for (Event e : eventSet) {
-                        if (e instanceof BreakpointEvent) {
-                            Location loc = ((BreakpointEvent) e).location();
-                            ThreadReference thread = ((BreakpointEvent) e).thread();
-                            if (allocTracking.contains(loc.toString())) {
+                        if (e instanceof LocatableEvent) {
+                            Location loc = ((LocatableEvent) e).location();
+                            ThreadReference thread = ((LocatableEvent) e).thread();
+                            if (loc.declaringType().name().equals("java.lang.ClassLoader")) {
+                                Value val = thread.frame(0).getArgumentValues().get(0);
+                                ReferenceType refType = ((ClassObjectReference)val).reflectedType();
+                                classLoadHandler.onClassLoad(refType);
+                                continue;
+                            } else if (allocTracking.contains(loc.toString())) {
                                 try {
                                     if (thread.frameCount() > 2) {
                                         StackFrame f0 = thread.frame(0);
@@ -360,6 +378,9 @@ public class JDWPClient {
                                 } else {
                                     e.request().disable();
                                 }
+                            } else {
+                                System.out.println("Break on: " + loc);
+                                dumpThread(thread);
                             }
                         }
                     }
@@ -407,5 +428,9 @@ public class JDWPClient {
                     setBreakpoint(method.location(), 0);
             }
         });
+    }
+
+    public interface ClassLoadEvent {
+        public void onClassLoad(ReferenceType ref);
     }
 }
