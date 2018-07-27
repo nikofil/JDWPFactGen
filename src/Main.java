@@ -6,18 +6,10 @@ import java.io.IOException;
 public class Main {
     public static void main(String[] args) {
         try {
-            final JDWPClient client = new JDWPClient("localhost", 5006, "facts2", false);
+            final JDWPClient client = new JDWPClient("localhost", 5006, "facts", false);
             client.depthLim = 10;
             client.stackFrameLim = 1;
             client.arrayLim = 3;
-            //client.setClassLoadHandler((ref) -> {
-                //String refStr = ref.toString();
-                //if (refStr.contains("alfresco") && refStr.contains("Test")) {
-                    //System.out.println("handler: " + refStr);
-                    //client.breakOnRefType(ref);
-                //}
-            //});
-            client.breakOnRegex("org.alfresco.*", "*Test");
             Runtime.getRuntime().addShutdownHook(new Thread(() -> client.close()));
             client.suspendAll();
             //System.out.println("setting bps for tracking allocations");
